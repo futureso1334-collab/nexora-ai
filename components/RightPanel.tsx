@@ -1,60 +1,93 @@
 "use client";
-import { sampleStatus } from "@/lib/mock";
+import { activity, plan, verification, type StepState } from "@/lib/mock";
+import { focus, panel } from "@/lib/ui";
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+const icon: Record<StepState, { glyph: string; cls: string; text: string }> = {
+  done: { glyph: "✓", cls: "text-emerald-400", text: "completed" },
+  active: { glyph: "●", cls: "text-cyan-400", text: "in progress" },
+  pending: { glyph: "○", cls: "text-slate-600", text: "pending" },
+};
+
+function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-      <p className="text-[11px] uppercase tracking-wider text-slate-500">{label}</p>
-      <div className="mt-1 text-sm text-slate-200">{children}</div>
-    </div>
+    <section className={`${panel} p-3`}>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        {note && <span className="text-[10px] text-slate-500">{note}</span>}
+      </div>
+      {children}
+    </section>
   );
 }
 
 export default function RightPanel({
-  open,
-  onClose,
-  projectName,
+  open, onClose, log, checkpoint, note, onCreate, onRestore,
 }: {
-  open: boolean;
-  onClose: () => void;
-  projectName: string;
+  open: boolean; onClose: () => void; log: string[];
+  checkpoint: { name: string; status: string }; note: string;
+  onCreate: () => void; onRestore: () => void;
 }) {
+  const small = `rounded-lg border border-white/10 px-3 py-2.5 text-sm text-slate-300 hover:bg-white/5 hover:text-white ${focus}`;
   return (
     <>
-      {open && <div className="fixed inset-0 z-30 bg-black/60 xl:hidden" onClick={onClose} />}
+      {open && <div className="fixed inset-0 z-30 bg-black/60 xl:hidden" onClick={onClose} aria-hidden="true" />}
       <aside
-        className={`fixed inset-y-0 right-0 z-40 flex w-80 max-w-[90vw] flex-col gap-3 overflow-y-auto border-l border-white/10 bg-[#070b14]/95 p-5 backdrop-blur transition-transform xl:static xl:translate-x-0 ${
+        aria-label="Agent activity and project status"
+        className={`fixed inset-y-0 right-0 z-40 flex w-80 max-w-[90vw] flex-col gap-3 overflow-y-auto border-l border-white/10 bg-[#080b12] p-4 transition-transform xl:static xl:translate-x-0 ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Project activity</h2>
-          <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">
-            Placeholder data
-          </span>
-        </div>
-        <Row label="Current project">{projectName}</Row>
-        <Row label="Agent status">
-          <span className="mr-2 inline-block h-2 w-2 rounded-full bg-slate-500" />
-          Not connected
-        </Row>
-        <Row label="Current task">None</Row>
-        <Row label="Files changed">
-          <p className="mb-1 text-xs text-slate-500">Example of how files will appear:</p>
-          <ul className="space-y-1 font-mono text-xs text-cyan-200/70">
-            {sampleStatus.files.map((f) => (
-              <li key={f}>{f}</li>
+        <button onClick={onClose} className={`${small} xl:hidden`}>Close panel</button>
+
+        <Section title="NEXORA Activity" note="Sample data">
+          <ul className="space-y-2">
+            {activity.map((a) => (
+              <li key={a.label} className="flex items-center gap-2.5 text-sm text-slate-300">
+                <span className={icon[a.state].cls} aria-hidden="true">{icon[a.state].glyph}</span>
+                {a.label}
+                <span className="sr-only"> ({icon[a.state].text})</span>
+              </li>
             ))}
           </ul>
-        </Row>
-        <Row label="Test status">Not run</Row>
-        <Row label="Checkpoint">None saved</Row>
-        <button
-          onClick={onClose}
-          className="mt-2 rounded-xl border border-white/10 py-2 text-sm text-slate-400 hover:text-white xl:hidden"
-        >
-          Close
-        </button>
+          {log.length > 0 && (
+            <ul aria-live="polite" className="mt-3 space-y-1 border-t border-white/10 pt-2 font-mono text-xs text-amber-200/80">
+              {log.map((l, i) => <li key={i}>› {l}</li>)}
+            </ul>
+          )}
+        </Section>
+
+        <Section title="Build Plan" note="Future workflow">
+          <ol className="space-y-1.5">
+            {plan.map((p, i) => (
+              <li key={p} className="flex gap-3 text-sm text-slate-300">
+                <span className="font-mono text-xs text-slate-500">{String(i + 1).padStart(2, "0")}</span>
+                {p}
+              </li>
+            ))}
+          </ol>
+        </Section>
+
+        <Section title="Latest Checkpoint" note="UI only">
+          <p className="text-sm text-slate-200">{checkpoint.name}</p>
+          <p className="mt-0.5 text-xs text-emerald-300">Status: {checkpoint.status}</p>
+          <div className="mt-3 flex gap-2">
+            <button onClick={onRestore} className={`${small} flex-1`}>Restore</button>
+            <button onClick={onCreate} className={`${small} flex-1`}>Create Checkpoint</button>
+          </div>
+          {note && <p role="status" className="mt-2 text-xs text-amber-200/80">{note}</p>}
+        </Section>
+
+        <Section title="Verification" note="Sample results">
+          <ul className="space-y-1.5">
+            {verification.map((v) => (
+              <li key={v.name} className="flex justify-between text-sm text-slate-300">
+                {v.name}
+                <span className="text-emerald-300"><span aria-hidden="true">✓ </span>{v.result}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-slate-500">Nothing is executed in the browser.</p>
+        </Section>
       </aside>
     </>
   );
