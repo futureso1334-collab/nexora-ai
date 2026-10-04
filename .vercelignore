@@ -1,0 +1,4 @@
+backend
+*.bak
+*.step*.bak
+install-nexora-engine.sh
