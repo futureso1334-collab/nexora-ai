@@ -22,10 +22,14 @@ function Section({ title, note, children }: { title: string; note?: string; chil
 
 export default function RightPanel({
   open, onClose, log, checkpoint, note, onCreate, onRestore,
+  approvalTool, onApprove, onDeny,
 }: {
   open: boolean; onClose: () => void; log: string[];
   checkpoint: { name: string; status: string }; note: string;
   onCreate: () => void; onRestore: () => void;
+  approvalTool: string | null;
+  onApprove: () => void;
+  onDeny: () => void;
 }) {
   const small = `rounded-lg border border-white/10 px-3 py-2.5 text-sm text-slate-300 hover:bg-white/5 hover:text-white ${focus}`;
   return (
@@ -55,6 +59,31 @@ export default function RightPanel({
             </ul>
           )}
         </Section>
+
+        {approvalTool && (
+          <Section title="Approval Required" note="Human decision">
+            <p className="text-sm text-slate-300">
+              NEXORA wants to execute:
+            </p>
+            <p className="mt-1 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 font-mono text-xs text-amber-200">
+              {approvalTool}
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={onDeny}
+                className={`${small} border-red-400/20 text-red-300 hover:bg-red-400/10`}
+              >
+                Deny
+              </button>
+              <button
+                onClick={onApprove}
+                className={`${small} border-emerald-400/20 text-emerald-300 hover:bg-emerald-400/10`}
+              >
+                Approve
+              </button>
+            </div>
+          </Section>
+        )}
 
         <Section title="Build Plan" note="Future workflow">
           <ol className="space-y-1.5">

@@ -29,9 +29,6 @@ export default function Workspace() {
   const [ckNote, setCkNote] = useState("");
   const [nav, setNav] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [approvalId, setApprovalId] = useState<string | null>(null);
-  const [approvalTool, setApprovalTool] = useState<string | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
@@ -56,170 +53,17 @@ export default function Workspace() {
     clearTimers(); setStatus("Ready"); setLog([]); setProject(name); setView("workspace");
   };
 
-  const build = async () => {
+  const build = () => {
     if (!prompt.trim()) { setError(true); return; }
     if (status !== "Ready") return;
-
     setError(false);
     clearTimers();
+    setLog(["Request received (local demo, no AI backend)"]);
     setStatus("Planning");
-    setLog(["Sending request to NEXORA Engine..."]);
-
-    try {
-      const response = await fetch("/api/engine/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request: prompt,
-          project_path: ".",
-          verify: true,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Engine returned HTTP ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      const agentStatus = String(result.status ?? "unknown");
-
-      if (agentStatus === "completed") {
-        setStatus("Ready");
-      } else if (agentStatus === "waiting_for_approval") {
-        setStatus("Building");
-      } else if (agentStatus === "failed") {
-        setStatus("Ready");
-      } else {
-        setStatus("Building");
-      }
-
-      const nextLog = [
-        `NEXORA Engine: ${agentStatus}`,
-        result.summary ?? "Agent run completed.",
-        `Run ID: ${result.run_id ?? "unknown"}`,
-      ];
-
-      if (result.pending_approval) {
-        setRunId(result.run_id ? String(result.run_id) : null);
-        setApprovalId(
-          result.pending_approval.approval_id
-            ? String(result.pending_approval.approval_id)
-            : null
-        );
-        setApprovalTool(
-          result.pending_approval.tool
-            ? String(result.pending_approval.tool)
-            : "filesystem operation"
-        );
-        nextLog.push(
-          `Approval required: ${result.pending_approval.tool ?? "filesystem operation"}`
-        );
-      } else {
-        setRunId(result.run_id ? String(result.run_id) : null);
-        setApprovalId(null);
-        setApprovalTool(null);
-      }
-
-      if (Array.isArray(result.verification_results)) {
-        for (const verification of result.verification_results) {
-          nextLog.push(
-            `Verification: ${verification.passed === true ? "PASSED" : verification.passed === false ? "FAILED" : "NO CHECKS"} — ${verification.summary ?? ""}`
-          );
-        }
-      }
-
-      if (Array.isArray(result.errors)) {
-        for (const message of result.errors) {
-          nextLog.push(`Error: ${message}`);
-        }
-      }
-
-      if (Array.isArray(result.tool_calls)) {
-        nextLog.push(`Tools executed: ${result.tool_calls.length}`);
-      }
-
-      setLog(nextLog);
-    } catch (err) {
-      setStatus("Ready");
-      setLog([
-        "Could not connect to NEXORA Engine.",
-        err instanceof Error ? err.message : "Unknown connection error.",
-      ]);
-    }
-  };
-
-  const decideApproval = async (approve: boolean) => {
-    if (!approvalId || !runId) return;
-
-    setStatus("Building");
-    setLog((prev) => [
-      ...prev,
-      approve ? "Approval granted. Resuming NEXORA Engine..." : "Approval denied.",
-    ]);
-
-    try {
-      const decision = await fetch(`/api/engine/approvals/${approvalId}/${approve ? "approve" : "deny"}`, {
-        method: "POST",
-      });
-
-      if (!decision.ok) {
-        throw new Error(`Approval request failed with HTTP ${decision.status}`);
-      }
-
-      if (!approve) {
-        setApprovalId(null);
-        setApprovalTool(null);
-        setStatus("Ready");
-        return;
-      }
-
-      const resumed = await fetch(`/api/engine/run/${runId}/resume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approval_id: approvalId }),
-      });
-
-      if (!resumed.ok) {
-        throw new Error(`Resume request failed with HTTP ${resumed.status}`);
-      }
-
-      const result = await resumed.json();
-      const agentStatus = String(result.status ?? "unknown");
-
-      setStatus(agentStatus === "completed" || agentStatus === "failed" ? "Ready" : "Building");
-      setApprovalId(
-        result.pending_approval?.approval_id
-          ? String(result.pending_approval.approval_id)
-          : null
-      );
-      setApprovalTool(
-        result.pending_approval?.tool
-          ? String(result.pending_approval.tool)
-          : null
-      );
-
-      setLog((prev) => [
-        ...prev,
-        `NEXORA Engine: ${agentStatus}`,
-        result.summary ?? "Agent resumed.",
-        ...(Array.isArray(result.errors)
-          ? result.errors.map((message: string) => `Error: ${message}`)
-          : []),
-        ...(Array.isArray(result.verification_results)
-          ? result.verification_results.map(
-              (v: { passed?: boolean | null; summary?: string }) =>
-                `Verification: ${v.passed === true ? "PASSED" : v.passed === false ? "FAILED" : "NO CHECKS"} — ${v.summary ?? ""}`
-            )
-          : []),
-      ]);
-    } catch (err) {
-      setStatus("Ready");
-      setLog((prev) => [
-        ...prev,
-        err instanceof Error ? err.message : "Approval/resume failed.",
-      ]);
-    }
+    const at = (ms: number, fn: () => void) => timers.current.push(setTimeout(fn, ms));
+    at(1200, () => { setStatus("Building"); setLog((l) => [...l, "Simulating file generation"]); });
+    at(2400, () => { setStatus("Testing"); setLog((l) => [...l, "Simulating verification"]); });
+    at(3400, () => { setStatus("Ready"); setLog((l) => [...l, "Demo finished. Nothing was generated or run."]); });
   };
 
   const toggle = (p: string) =>
@@ -314,9 +158,6 @@ export default function Workspace() {
         open={panelOpen} onClose={() => setPanelOpen(false)} log={log} checkpoint={checkpoint}
         note={ckNote} onCreate={createCheckpoint}
         onRestore={() => setCkNote("Restore is UI-only for now. Nothing was changed.")}
-        approvalTool={approvalTool}
-        onApprove={() => decideApproval(true)}
-        onDeny={() => decideApproval(false)}
       />
     </div>
   );

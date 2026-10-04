@@ -1,0 +1,20 @@
+"""Model provider interface. FreeLLMAPI will be added later as another ModelProvider
+implementation (server-side only). Nothing here calls any external service."""
+from abc import ABC, abstractmethod
+
+
+class ModelProvider(ABC):
+    name: str = "base"
+
+    @abstractmethod
+    def generate(self, prompt: str, *, system: str | None = None, max_tokens: int = 1024) -> str:
+        """Return model text for a prompt."""
+
+
+class MockProvider(ModelProvider):
+    """Local placeholder. It does no reasoning; it only reports that no model is connected."""
+
+    name = "mock"
+
+    def generate(self, prompt: str, *, system: str | None = None, max_tokens: int = 1024) -> str:
+        return f"[mock provider] no language model is connected (received {len(prompt)} characters)."

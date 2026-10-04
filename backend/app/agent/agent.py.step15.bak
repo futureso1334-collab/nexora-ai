@@ -1,0 +1,181 @@
+"""NEXORA agent core: plan -> execute -> observe -> verify -> result.
+
+Engine V1 honesty: the agent can inspect, search and run verification through tools. It does NOT
+generate code, fix errors, create checkpoints or call any language model yet. Those steps are
+reported as skipped, never faked.
+"""
+import logging
+
+from ..errors import NotFoundError
+from ..security.path_guard import PathGuard
+from ..tools.project import detect_types
+from ..tools.registry import ToolRegistry
+from .executor import StepExecutor
+from .models import AgentPlan, AgentRequest, AgentState, AgentStatus, AgentStep, StepStatus
+from .observer import observe
+from .planner import DeterministicPlanner
+from .codegen import CodeGenerator
+from .provider import ModelProvider
+from .state import RunStore
+from .verifier import Verifier
+
+log = logging.getLogger("nexora.agent")
+
+
+class Agent:
+    def __init__(self, registry: ToolRegistry, guard: PathGuard, provider: ModelProvider, store: RunStore):
+        self.registry, self.guard, self.provider, self.store = registry, guard, provider, store
+        self.planner = DeterministicPlanner(provider)
+        self.executor = StepExecutor(registry)
+        self.verifier = Verifier()
+        self.codegen = CodeGenerator(provider)
+
+    def plan(self, req: AgentRequest) -> AgentPlan:
+        base = self.guard.resolve(req.project_path)
+        if not base.is_dir():
+            raise NotFoundError("project_path is not a directory")
+        return self.planner.plan(req, detect_types(base))
+
+    def run(self, req: AgentRequest) -> AgentState:
+        state = self.store.create(req, self.plan(req))
+        return self._execute(state, 0, None)
+
+    def resume(self, run_id: str, approval_id: str) -> AgentState:
+        state = self.store.get(run_id)
+        if state is None:
+            raise NotFoundError("unknown run")
+        if state.status is not AgentStatus.waiting_for_approval or not state.pending_approval:
+            raise NotFoundError("run is not waiting for approval")
+        return self._execute(state, int(state.pending_approval["step"]), approval_id)
+
+    # ---- internals -------------------------------------------------
+    def _execute(self, state: AgentState, start: int, approval_id: str | None) -> AgentState:
+        state.status, state.pending_approval = AgentStatus.executing, None
+        for step in state.current_plan.steps[start:]:
+            state.current_step = step.index
+            if step.kind == "unsupported":
+                step.status = StepStatus.skipped
+                continue
+            if step.kind == "analysis":
+                if step.id == "identify":
+                    step.note = "Detected project type(s): " + ", ".join(state.current_plan.project_types)
+                self._done(state, step)
+                continue
+            is_verify = step.tool_call.tool == "test.run"
+            state.status = AgentStatus.verifying if is_verify else AgentStatus.executing
+            step.status = StepStatus.running
+            result = self.executor.run(state, step, approval_id if step.index == start else None)
+            state.status = AgentStatus.observing
+            state.observations.append(observe(step, result))
+            if result.status == "approval_required":
+                step.status = StepStatus.waiting_for_approval
+                state.status = AgentStatus.waiting_for_approval
+                state.pending_approval = {"approval_id": result.approval_id, "step": step.index,
+                                          "tool": step.tool_call.tool, "reason": result.error}
+                self.store.save(state)
+                return state
+            if is_verify:
+                v = self.verifier.interpret(result)
+                state.verification_results.append(v)
+                if v.passed is None:
+                    step.status, step.note = StepStatus.skipped, v.summary
+                    continue
+                if not v.passed:
+                    return self._fail(state, step, f"Verification failed ({v.summary}). Automatic fixing is not implemented in Engine V1.")
+                self._done(state, step)
+            elif result.success:
+                self._done(state, step)
+            else:
+                return self._fail(state, step, f"{step.title}: {result.error}")
+        # Steps 12-14: after the model has inspected the project, generate
+        # structured file changes and turn them into normal registry tool calls.
+        if state.status != AgentStatus.failed:
+            read_context = []
+            for call in state.tool_calls:
+                if call.tool == "filesystem.read" and call.result and call.result.success:
+                    read_context.append({
+                        "tool": call.tool,
+                        "arguments": call.arguments,
+                        "result": call.result.data,
+                    })
+
+            if read_context or state.current_plan.planner == "llm":
+                changes = self.codegen.generate(
+                    state.current_plan.request,
+                    state.current_plan.project_types,
+                    read_context,
+                )
+
+                for change in changes:
+                    idx = len(state.current_plan.steps)
+                    step = AgentStep(
+                        index=idx,
+                        id=f"write_{idx}",
+                        title=f"Write {change.path}",
+                        description="Apply the generated file change through the filesystem registry.",
+                        kind="tool",
+                        tool_call=ToolCall(
+                            tool="filesystem.write",
+                            arguments={
+                                "path": change.path,
+                                "content": change.content,
+                                "overwrite": change.overwrite,
+                            },
+                        ),
+                    )
+                    state.current_plan.steps.append(step)
+
+                if changes:
+                    state.notes.append(f"Generated {len(changes)} structured file change(s).")
+                else:
+                    state.notes.append("No valid file changes were generated.")
+
+        # Execute only the newly generated write steps through the registry.
+        generated_steps = [
+            step for step in state.current_plan.steps
+            if step.id.startswith("write_") and step.status == StepStatus.pending
+        ]
+        for step in generated_steps:
+            if step.kind != "tool" or not step.tool_call:
+                generated_start += 1
+                continue
+
+            result = self.executor.run(state, step, None)
+            state.observations.append(observe(step, result))
+
+            if result.status == "approval_required":
+                step.status = StepStatus.waiting_for_approval
+                state.status = AgentStatus.waiting_for_approval
+                state.pending_approval = {
+                    "approval_id": result.approval_id,
+                    "step": step.index,
+                    "tool": step.tool_call.tool,
+                    "reason": result.error,
+                }
+                self.store.save(state)
+                return state
+
+            if not result.success:
+                return self._fail(state, step, f"{step.title}: {result.error}")
+
+            self._done(state, step)
+        return self._finish(state, AgentStatus.completed)
+
+    def _done(self, state: AgentState, step: AgentStep) -> None:
+        step.status = StepStatus.completed
+        state.completed_steps.append(step.index)
+
+    def _fail(self, state: AgentState, step: AgentStep, message: str) -> AgentState:
+        step.status = StepStatus.failed
+        state.errors.append(message)
+        return self._finish(state, AgentStatus.failed)
+
+    def _finish(self, state: AgentState, status: AgentStatus) -> AgentState:
+        steps = state.current_plan.steps
+        skipped = [s.title for s in steps if s.status is StepStatus.skipped]
+        state.status = status
+        state.summary = (f"{len(state.completed_steps)}/{len(steps)} steps completed. Skipped: {', '.join(skipped) or 'none'}. "
+                         "Engine V1 does not generate code, fix errors or create checkpoints; the agent made no file edits.")
+        self.store.save(state)
+        log.info("run=%s status=%s", state.run_id, status.value)
+        return state
