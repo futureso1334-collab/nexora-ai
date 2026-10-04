@@ -82,22 +82,20 @@ export default function Workspace() {
 
       const result = await response.json();
 
-      const agentStatus = String(result.status ?? "unknown");
+      const agentStatus = result.success ? "completed" : String(result.status ?? "failed");
 
-      if (agentStatus === "completed") {
+      if (result.success) {
         setStatus("Ready");
       } else if (agentStatus === "waiting_for_approval") {
         setStatus("Building");
-      } else if (agentStatus === "failed") {
-        setStatus("Ready");
       } else {
-        setStatus("Building");
+        setStatus("Ready");
       }
 
       const nextLog = [
         `NEXORA Engine: ${agentStatus}`,
-        result.summary ?? "Agent run completed.",
-        `Run ID: ${result.run_id ?? "unknown"}`,
+        result.response ?? result.summary ?? result.error ?? "Agent run completed.",
+        ...(result.run_id ? [`Run ID: ${result.run_id}`] : []),
       ];
 
       if (result.pending_approval) {
